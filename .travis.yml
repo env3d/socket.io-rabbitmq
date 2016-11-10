@@ -9,5 +9,5 @@ services:
 script:
   - npm test
 before_script:
-  - echo '127.0.0.1 rabbitmq' >> /etc/hosts
+  - sudo echo '127.0.0.1 rabbitmq' >> /etc/hosts
   
