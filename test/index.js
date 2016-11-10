@@ -9,8 +9,12 @@ const adapter = require('../index'),
       msgpack = require('msgpack-js'),      
       debug = require('debug')('test');
 
-const RABBIT_MQ_URI = 'amqp://rabbitmq';
 
+var RABBIT_MQ_URI = 'amqp://rabbitmq';
+if (process.env['RABBIT_MQ_URI']) {
+    RABBIT_MQ_URI = process.env['RABBIT_MQ_URI'];
+}
+    
 describe('socket.io-rabbitmq', function () {
 
     this.timeout(10000);
@@ -83,7 +87,7 @@ describe('socket.io-rabbitmq', function () {
 	});
     });
 
-    it.only('send to room with queued message', function(done) {
+    it('send to room with queued message', function(done) {
 	create(function(server1, client1) {
 	    server1.on('connection', function(c1) {
 		server1.to('woot').emit('msg','delayed');

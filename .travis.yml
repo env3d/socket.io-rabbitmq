@@ -4,10 +4,9 @@ node_js:
 sudo: required
 env:
   - DEBUG=test,socket-io.rabbitmq
+  - RABBIT_MQ_URI=amqp://localhost
 services:
   - rabbitmq
 script:
   - npm test
-before_script:
-  - sudo echo '127.0.0.1 rabbitmq' >> /etc/hosts
   
