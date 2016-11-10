@@ -1,0 +1,31 @@
+{
+    "name": "socket.io-rabbitmq",
+    "version": "0.1.0",
+    "description": "A Sockets.IO Adapter using RabbitMQ, allow persistent room messages",
+    "directories": {
+	"test": "test"
+    },
+    "engines": {
+	"node": ">=6.0"
+    },
+    "scripts": {
+	"test": "mocha"
+    },    
+    "dependencies": {
+	"amqplib": "0.4.x",
+	"debug": "2.2.x",
+	"msgpack-js": "0.3.x",
+	"shortid": "^2.2.6",
+	"socket.io-adapter": "0.4.x"
+    },
+    "devDependencies": {
+	"expect.js": "^0.3.1",
+	"mocha": "1.18.0",
+	"socket.io": "1.0.2",
+	"socket.io-client": "1.0.2"
+    },
+    "authors": [
+	"Jason Madar"
+    ],
+    "license": "MIT"
+}
