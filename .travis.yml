@@ -2,9 +2,10 @@ language: node_js
 node_js:
   - "6"
 sudo: required
-global:
-  - DEBUG=test,socket-io.rabbitmq
-  - RABBIT_MQ_URI=amqp://localhost
+env:
+  global:
+    - DEBUG=test,socket-io.rabbitmq
+    - RABBIT_MQ_URI=amqp://localhost
 services:
   - rabbitmq
 script:
