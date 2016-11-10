@@ -1,0 +1,9 @@
+language: node_js
+node_js:
+  - "6"
+env:
+  - DEBUG=test,socket-io.rabbitmq
+services:
+  - rabbitmq
+script:
+  - npm test
