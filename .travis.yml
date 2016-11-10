@@ -1,9 +1,13 @@
 language: node_js
 node_js:
   - "6"
+sudo: required
 env:
   - DEBUG=test,socket-io.rabbitmq
 services:
   - rabbitmq
 script:
   - npm test
+before_script:
+  - echo '127.0.0.1 rabbitmq' >> /etc/hosts
+  
