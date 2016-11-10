@@ -7,6 +7,8 @@ This adapter has the following semantics:
 - Each room is modeled as a persistent queue
 - We can bind routing keys to a room, allowing for "role" type behavior
 
+[![Build Status](https://api.travis-ci.org/env3d/socket.io-rabbitmq.svg?branch=master)
+
 ## How to use
 
 ```js
