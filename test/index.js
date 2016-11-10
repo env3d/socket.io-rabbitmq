@@ -90,10 +90,10 @@ describe('socket.io-rabbitmq', function () {
     it('send to room with queued message', function(done) {
 	create(function(server1, client1) {
 	    server1.on('connection', function(c1) {
-		server1.to('woot').emit('msg','delayed');
+		server1.to('late').emit('msg','delayed');
 		setTimeout(()=>{
-		    debug('c1 joining woot');
-		    c1.join('woot');
+		    debug('c1 joining late');
+		    c1.join('late');
 		}, 2000);
 	    });
 
