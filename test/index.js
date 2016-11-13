@@ -104,6 +104,97 @@ describe('socket.io-rabbitmq', function () {
 	    });
 	});
     });
+
+    it('send with ack', function(done){
+	create(function(server, client) {
+	    server.on('connection', function(socket) {
+		debug("client connected");
+		socket.join('ackRoom');
+		
+		server.to('ackRoom').emit('msg', 'test');
+		
+		socket.on('ack',function(deliveryId) {
+		    debug('ack received from client, performing ack on amqpChannel');
+		    socket.amqpChannel((ch)=>ch.ack(deliveryId));
+		    done();
+		});
+	    });
+
+	    client.on('msg', function(msg, deliveryId) {
+		debug('message received %s', msg);
+		debug(deliveryId);		
+		expect(msg).to.eql('test');
+		client.emit('ack',deliveryId);
+	    });
+	});
+    });
+
+    // We have some issues when broadcasting to a socket.id
+    // the assert for socket.id 
+    it('emiting to a socket via broadcast', function(done) {
+	create(function(server, client) {
+	    server.on('connection', function(socket) {
+		server.to(socket.id).emit('msg','hi');		
+	    });
+
+	    client.on('msg', function(msg) {
+		expect(msg).to.eql('hi');
+		done();
+	    });
+	    
+	});
+    });
+	 
+    it('multiple clients to one room', function(done) {
+	var connected = 0;
+	var ackCount = 0;
+
+	const numMessages = 5;
+	const numClients = 5;
+	
+	const room = 'ackMultiRoom';
+	
+	create(function(server, client1) {
+
+	    server.on('connection', function(socket) {
+		debug('client connected %s', socket.id);
+		socket.join(room);
+		debug('total clients connected %s',++connected);
+		if (connected == numClients) {
+		    for (var i = 1; i <= numMessages; i++) {
+			setTimeout(() => {
+			    server.to(room).emit('msg', 'message '+i);
+			}, i*500);			
+		    }
+		}
+
+		socket.on('ack', function(deliveryId) {
+		    debug('ack from socket %s', socket.id);
+		    socket.amqpChannel(function(ch) {
+			ch.ack(deliveryId);
+			debug('Ack received from %s, ack count: %s',socket.id, ++ackCount);
+
+			if (ackCount == numMessages*numClients) {
+			    done();
+			}
+		    });
+		});
+	    });
+
+	    var msgFunc = function(msg, deliveryId) {
+		debug('client: %s', msg);
+		debug(deliveryId);
+		this.emit('ack', deliveryId);
+	    };
+
+	    client1.on('msg', msgFunc);
+	    // create another client to connect to the same server
+	    for (var i = 1; i < numClients; i++) {
+		debug('creating additional client');
+		ioc(client1.url, {multiplex: false}).on('msg', msgFunc);		
+	    }
+	});
+    });
     
     it('send to rooms via routing in rabbitmq', function(done) {
 	var roles = {
@@ -113,7 +204,7 @@ describe('socket.io-rabbitmq', function () {
 
 	var respond = 0;
 	function received() {
-	    respond++;
+	    respond++;	    
 	    if (respond == 2) {
 		done();
 	    }
@@ -125,9 +216,9 @@ describe('socket.io-rabbitmq', function () {
 		c1.join('client1');
 	    });
 	    
-	    client1.on('woot', function(data) {
+	    client1.on('woot', function(data, deliveryId) {
 		debug("Client1 received data:");
-		debug(data);
+		debug(data, deliveryId);
 		expect(data).to.eql('hello');
 		received();
 	    });
@@ -137,27 +228,26 @@ describe('socket.io-rabbitmq', function () {
 		server2.on('connection', function(c2) {
 		    debug('client2 joining unique room');
 		    c2.join('client2');
-		});
 
-		client2.on('woot', function(data) {
-		    debug("Client2 received data:");
-		    debug(data);
-		    expect(data).to.eql('hello');
-		    received();
-		});
-
-		amqp.connect(RABBIT_MQ_URI).then(function(conn){
-		    return conn.createChannel();
-		}).then(function(ch) {
-		    const exchange = 'amqpDirectExchange'
-		    ch.assertExchange(exchange, 'direct', {durable:false});
-		    debug("Sending message to supervisors");
+		    debug("Sending message to supervisors via direct amqp channel");
 		    var msg = {
 			type: 2,
 			data: ['woot', 'hello']
-		    }		    
-		    ch.publish(exchange, 'supervisor', msgpack.encode([msg]));
-		});			
+		    }
+		    
+		    c2.amqpChannel(function(channel) {
+			debug('publishing message to woot');
+			//console.log(channel);
+			channel.publish('amqpDirectExchange', 'supervisor', msgpack.encode([msg]));
+		    });
+		});
+
+		client2.on('woot', function(data, deliveryId) {
+		    debug("Client2 received data:");
+		    debug(data,deliveryId);
+		    expect(data).to.eql('hello');
+		    received();
+		});
 	    });
 	});
     });
@@ -185,7 +275,10 @@ describe('socket.io-rabbitmq', function () {
 		} // abort tests
 		
 		const url = 'http://localhost:'+srv.address().port+'/'
-		fn(sio.of('/'), ioc(url));
+		const client = ioc(url,{multiplex:false});
+		client.url = url;
+
+		fn(sio.of('/'), client);
 	    });	
 	});
 

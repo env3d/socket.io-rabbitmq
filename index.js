@@ -47,7 +47,6 @@ AMQPAdapter.prototype.__proto__ = Adapter.prototype;
 function AMQPAdapter(nsp)
 {
     Adapter.call(this, nsp);
-
     var self = this;
 
     self.amqp_uuid = shortid.generate();
@@ -95,8 +94,34 @@ function AMQPAdapter(nsp)
     }).catch(function(err){
 	debug('Error creating connection');
 	debug(err);
-    })
+    });
 
+    // A socket object can call socket.amqpChannel() to retrieve
+    // the amqpChannel object to perform amqp related commands
+    // such as publish and confirm.
+
+    // see http://www.squaremobius.net/amqp.node/channel_api.html for what
+    // you can do with channels
+    
+    nsp.on('connection', function(socket) {
+	socket.amqpChannel = function(callback) {
+	    if (self.amqpChannels[socket.id]) {
+		debug(callback);
+		callback(self.amqpChannels[socket.id]);
+	    } else {
+		setTimeout(() => socket.amqpChannel(callback), 100);
+	    }
+	}
+    });
+
+    // allow client to retrieve amqpChannel as well
+    nsp.amqpChannel = function(callback) {
+	if (self.amqpPublishChannel) {
+	    callback(self.amqpPublishChannel);
+	} else {
+	    setTimeout(() => {nsp.amqpChannel(callback)}, 100);	    
+	}
+    }
 }
 
 /**
@@ -113,6 +138,7 @@ AMQPAdapter.prototype.add = function (id, room, fn)
     debug('adding %s to %s ', id, room);
 
     const self = this;
+
     Adapter.prototype.add.call(this, id, room);
 
     var opts = null;
@@ -157,13 +183,19 @@ AMQPAdapter.prototype.broadcast = function (packet, opts)
     // send packet to named queues.  room is translated to queues
     // The broadcast simply queues the message, the receive callback will
     // send the data back to all the sockets
-    // we revert to regular broadcast if rooms are not invovled.
-    
+    // we revert to regular broadcast if rooms are not invovled.    
     if (opts.rooms) {
 	opts.rooms.forEach(function(room) {
-	    self.amqpPublishChannel.assertQueue(room, {durable: false});
+	    // this is tricky... in socket.io, room can be explicit, or implicit in the case of
+	    // the connection name.  When we create the amqp queue, we use the socket.id name as
+	    // the queue name, but we declare autoDelete: true, so we have to match it here.
+	    if (self.nsp.connected[room]) {
+		self.amqpPublishChannel.assertQueue(room, {durable: false, autoDelete: true});
+	    } else {
+		self.amqpPublishChannel.assertQueue(room, {durable: false});
+	    }
 	    self.amqpPublishChannel.publish('', room, msgpack.encode([packet,opts]));	
-	})
+	});
     } else {
 	debug('forwarding to global queue');
 	self.amqpPublishChannel.publish(defaults.exchange_name, '', msgpack.encode([self.amqp_uuid,packet,opts]));
@@ -240,8 +272,17 @@ function createChannel(id, room, opts, fn) {
 	}
     } else {
 	self.amqp_connection.createChannel().then(function(ch) {
+	    ch.original_ack = ch.ack;
+	    ch.ack = function(deliveryTag) {
+		if (deliveryTag.channel === id) {
+		    debug('acking!');
+		    this.original_ack(deliveryTag);
+		} else {
+		    debug('message not from this socket, not acking');
+		}
+	    };
+	    
 	    self.amqpChannels[id] = ch;
-	    debug(opts);
 	    fn.call(self, ch, id, room, opts);	    
 	});
     }
@@ -297,23 +338,37 @@ function channelConsumeCallback(id, room, msg) {
     
     const args = msgpack.decode(msg.content);
     
-    // probably don't want to ack here, want client to send ack as
-    // we are just a proxy here
-    this.amqpChannels[id].ack(msg);
-
     var rebroadcast = true;
     if (args.length == 1) {
 	rebroadcast = false;
-	// someone published to the queue directly, have to add the opts
+	// someone published to the queue directly, have to add some additional
+	// data to make it a socket.io mesage
 	args.push({
 	    rooms: [room],
 	    flags: undefined
 	});
-    }
+    };
     
+    // add the delivery tag to allow ack
+    const deliveryTag = {
+	channel: id,
+	fields: {
+	    deliveryTag: msg.fields.deliveryTag
+	}
+    };
+    args[0].data.push(deliveryTag);
     args.push(true);
     debug(args);
+
+    // ack the message if the room does not require acknolwedgement
+    // @todo, need to figure out how to indiciate a room requires
+    //        ack, for now, if a room name contains 'ack', it requires it
+    if (!room.includes('ack')) {
+	debug('auto acking');
+	this.amqpChannels[id].ack(deliveryTag);
+    }
     
+    // This is the actual delivery to client
     Adapter.prototype.broadcast.apply(this, args);
 
     // broadcast to global queue to notify other nodes
