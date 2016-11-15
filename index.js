@@ -7,6 +7,7 @@
 const Adapter = require('socket.io-adapter'),
       amqplib = require('amqplib'),      
       debug = require('debug')('socket.io-rabbitmq'),
+      Socket = require('socket.io/lib/socket.js'),
       msgpack = require('msgpack-js'),
       shortid = require('shortid');
 
@@ -35,7 +36,6 @@ function adapter(uri, roles)
  */
 
 AMQPAdapter.prototype.__proto__ = Adapter.prototype;
-
 
 /**
  * Adapter constructor.
@@ -87,6 +87,21 @@ function AMQPAdapter(nsp)
 		debug('Message originates from this node.  Safely ignored...');
 		return;
 	    }
+
+	    if (args[0] === 'disconnect') {
+		// internal request to disconnect from a room
+		var room = args[1];
+		debug('Disconnecting all connections from room %s', room);
+		
+		if (self.rooms[room]) {
+		    Object.keys(self.rooms[room].sockets).forEach(function(socketId) {
+			debug('removing socket %s from room %s', socketId, room);
+			self.nsp.connected[socketId].disconnect(true);		    
+		    });
+		}
+		return;
+	    }
+	    
 	    debug('Broadcasting to local node');			
 	    args.push(true);
 	    Adapter.prototype.broadcast.apply(self, args);
@@ -102,7 +117,6 @@ function AMQPAdapter(nsp)
 
     // see http://www.squaremobius.net/amqp.node/channel_api.html for what
     // you can do with channels
-    
     nsp.on('connection', function(socket) {
 	socket.amqpChannel = function(callback) {
 	    if (self.amqpChannels[socket.id]) {
@@ -111,7 +125,7 @@ function AMQPAdapter(nsp)
 	    } else {
 		setTimeout(() => socket.amqpChannel(callback), 100);
 	    }
-	}
+	}		
     });
 
     // allow client to retrieve amqpChannel as well
@@ -139,6 +153,19 @@ AMQPAdapter.prototype.add = function (id, room, fn)
 
     const self = this;
 
+    if(this.rooms[room]) {
+	Object.keys(this.rooms[room].sockets).forEach(function(socketId) {
+	    if (socketId === id) {
+		debug('>>> %s is already in this room', socketId);
+	    } else {
+		debug('>>> Another connection, %s, is already in the room, kicking them out', socketId);
+		self.nsp.connected[socketId].disconnect(true);
+	    }
+	});
+    }
+    // tell all other nodes to disconnect from this room
+    self.amqpPublishChannel.publish(defaults.exchange_name, '', msgpack.encode([self.amqp_uuid,'disconnect',room]));		
+    
     Adapter.prototype.add.call(this, id, room);
 
     var opts = null;
@@ -240,9 +267,28 @@ AMQPAdapter.prototype.delAll = function (id, fn)
 {
     debug('removing %s from all rooms', id);
 
+    var self = this;
+    var cancelChannel = function(id) {
+	if (self.amqpChannels && self.amqpChannels[id]) {
+	    debug('deleting channel %s', id);
+	    self.amqpChannels[id].close();
+	    delete self.amqpChannels[id];
+	    delete self.amqpConsumers[id];
+	} else {
+	    debug('channel %s not available yet, waiting', id);
+	    setTimeout(function() {
+		cancelChannel(id);
+	    }, 100);
+	}
+    }
+
+    cancelChannel(id);
+    
+    /*
     this.amqpChannels[id] ? this.amqpChannels[id].close() : {} ;
     delete this.amqpChannels[id];
     delete this.amqpConsumers[id];
+    */
     
     Adapter.prototype.delAll.call(this, id);
 };
@@ -268,10 +314,17 @@ function createChannel(id, room, opts, fn) {
 	if (errorCount++ < 5) {
 	    setTimeout(() => createChannel.call(this, id, room, opts, fn), 1000);
 	} else {
-	    debug('no connection available at all, giving up');
+	    console.log('no connection available at all, giving up');
+	    // @todo should probably hard crash this guy
+	    process.exit(1);
 	}
     } else {
+
 	self.amqp_connection.createChannel().then(function(ch) {
+	    // override the ack method of channel to allow multiple
+	    // clients to send ack without killing the channel if
+	    // the deliveryTag comes from a different channel
+	    debug('channel created');
 	    ch.original_ack = ch.ack;
 	    ch.ack = function(deliveryTag) {
 		if (deliveryTag.channel === id) {
@@ -283,7 +336,10 @@ function createChannel(id, room, opts, fn) {
 	    };
 	    
 	    self.amqpChannels[id] = ch;
-	    fn.call(self, ch, id, room, opts);	    
+	    fn.call(self);
+	}).catch(function(error) {
+	    console.log(error);
+	    process.exit(1);
 	});
     }
 }

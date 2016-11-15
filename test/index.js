@@ -149,10 +149,12 @@ describe('socket.io-rabbitmq', function () {
 	var connected = 0;
 	var ackCount = 0;
 
-	const numMessages = 5;
-	const numClients = 5;
+	const numMessages = 3;
+	const numClients = 2;
 	
 	const room = 'ackMultiRoom';
+
+	var messageId = 0;
 	
 	create(function(server, client1) {
 
@@ -163,14 +165,23 @@ describe('socket.io-rabbitmq', function () {
 		if (connected == numClients) {
 		    for (var i = 1; i <= numMessages; i++) {
 			setTimeout(() => {
-			    server.to(room).emit('msg', 'message '+i);
+			    server.to(room).emit('msg', 'message '+(messageId++));
 			}, i*500);			
 		    }
 		}
 
 		socket.on('ack', function(deliveryId) {
-		    debug('ack from socket %s', socket.id);
+		    debug('ack from socket %s, id %s', socket.id, deliveryId.channel);
 		    socket.amqpChannel(function(ch) {
+			/*
+			if (ackCount == 0) {
+			    if (deliveryId.channel === socket.id) {
+				debug('not acking on purpose, closing connection');
+				socket.disconnect();
+				return;
+			    }
+			}
+			*/
 			ch.ack(deliveryId);
 			debug('Ack received from %s, ack count: %s',socket.id, ++ackCount);
 
@@ -181,17 +192,25 @@ describe('socket.io-rabbitmq', function () {
 		});
 	    });
 
-	    var msgFunc = function(msg, deliveryId) {
-		debug('client: %s', msg);
-		debug(deliveryId);
+	    client1.on('msg', function(msg, deliveryId) {
+		debug('client1: %s', msg);
+		debug(deliveryId);		
 		this.emit('ack', deliveryId);
-	    };
-
-	    client1.on('msg', msgFunc);
+		//this.close();
+	    });
+	    
 	    // create another client to connect to the same server
 	    for (var i = 1; i < numClients; i++) {
 		debug('creating additional client');
-		ioc(client1.url, {multiplex: false}).on('msg', msgFunc);		
+		ioc(client1.url, {multiplex: false}).on(
+		    'msg',
+		    function(msg, deliveryId) {
+			debug('client2: %s', msg);
+			debug(deliveryId);
+			this.emit('ack', deliveryId);
+			//this.close();
+		    }
+		);
 	    }
 	});
     });
@@ -249,8 +268,65 @@ describe('socket.io-rabbitmq', function () {
 		    received();
 		});
 	    });
+	});	
+    });
+    
+    it('multi server room listing', function(done) {
+	create(function(server1, client1) {
+	    server1.on('connection', function(socket) {
+		socket.join('user1');
+	    });
+	    create(function(server2, client2) {
+		server2.on('connection', function(socket) {
+		    socket.join('user2');
+		    console.log(server1.adapter.rooms);
+		    console.log(server2.adapter.rooms);
+		    done();
+		});
+	    });
 	});
     });
+
+    it.skip('kick out other clients in the same node', function(done) {
+	create(function(server, client1) {
+	    
+	    setTimeout(() => {
+		server.to('room1').emit('msg', 'hi');
+	    }, 1000);
+	    
+	    server.on('connection', function(socket) {		
+		socket.join('room1');
+
+	    });
+
+	    client1.on('msg', function(data) {
+		debug('client 1 receives %s', data);
+	    });
+
+	    var client2 = ioc(client1.url, {multiplex: false});
+	    client2.on('msg', function(data) {
+		debug('client 2 receives %s', data);
+	    });	    
+	    
+	});
+    });
+
+    it.only('kick out other clients from different node', function(done) {
+	create(function(server1, client1) {
+	    server1.on('connection', function(socket) {
+		socket.join('room1');
+	    });
+	    create(function(server2, client2) {
+		server2.on('connection', function(socket) {
+		    setTimeout(() => {
+			debug('client2 joining');
+			socket.join('room1');			
+		    }, 1000);
+		});		
+	    });
+	});
+    });
+    
 
     // create a pair of socket.io server+client
     function create(roles, fn) {
